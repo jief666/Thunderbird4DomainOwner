@@ -1,0 +1,703 @@
+--- ./comm/mail/components/compose/content/MsgComposeCommands.js	2021-07-12 16:35:21.000000000 +0300
++++ ../../thunderbird-78.12.0/./comm/mail/components/compose/content/MsgComposeCommands.js	2021-07-22 22:50:16.000000000 +0300
+@@ -2771,6 +2771,51 @@
+       dump("### textEditor.wrapWidth exception text: " + e + " - failed\n");
+     }
+   }
++//  // Jief
++//  try {
++    if ( gMsgCompose.compFields.from !== "" ) {
++      var identityElement = document.getElementById("msgIdentity");
++      identityElement.value = gMsgCompose.compFields.from;
++    }
++//    else{
++//      var idKey = identityElement.selectedItem.getAttribute("identitykey");
++//      var identity = MailServices.accounts.getIdentity(idKey);
++//      var email = identity.email;
++//      var emailMask = identity.emailMask;
++//      
++//      if ( emailMask == null  ||  emailMask.length == 0 ) {
++//        identityElement.value = identity.fullAddress;
++//      }else{
++//        var idx = email.indexOf("@");
++//        var name = email.substring(0, idx);
++//        var accountDomain = email.substring(idx);
++//        var fullName = identity.fullName;
++//      
++//        var min = 0;
++//        var max = 9;
++//      
++//        var generatedEmail = "";
++//        if ( fullName != null  &&  fullName.length > 0 ) {
++//          generatedEmail = fullName + " <";
++//        }
++//        for (var i = 0; i < emailMask.length; i++) {
++//          if ( emailMask.charAt(i) == '?' ) {
++//            var num = Math.floor(Math.random() * (max - min + 1)) + min;
++//            generatedEmail = generatedEmail + num;
++//          }else{
++//            generatedEmail = generatedEmail + emailMask.charAt(i);
++//          }
++//        }
++//        generatedEmail = generatedEmail + accountDomain;
++//        if ( fullName != null  &&  fullName.length > 0 ) {
++//          generatedEmail = generatedEmail + ">";
++//        }
++//        identityElement.value = generatedEmail;
++//      }
++//    }
++//  }
++//  catch (ex) {
++//  }
+ 
+   CompFields2Recipients(gMsgCompose.compFields);
+   SetComposeWindowTitle();
+@@ -3572,14 +3617,19 @@
+     // Search for a matching identity.
+     if (from) {
+       for (let ident of identities) {
+-        if (ident.email && from == ident.email.toLowerCase()) {
+-          if (suitableCount == 0) {
+-            params.identity = ident;
+-          }
+-          suitableCount++;
+-          if (suitableCount > 1) {
+-            // No need to find more, it's already not unique.
+-            break;
++        if (ident.email) {
++          var email1 = ident.email.toLowerCase().replace(new RegExp("\\.", 'g'), "\\.");
++          var email2 = email1.replace(new RegExp("\\*", 'g'), ".*");
++          var re = new RegExp("^" + email2 + "$");
++          if ( re.test(from) ) {
++            if (suitableCount == 0) {
++              params.identity = ident;
++            }
++            suitableCount++;
++            if (suitableCount > 1) {
++              // No need to find more, it's already not unique.
++              break;
++            }
+           }
+         }
+       }
+@@ -3640,6 +3690,8 @@
+     }
+   }
+   LoadIdentity(true);
++// Jief
++  MakeFromFieldEditable(true);
+ 
+   // Get the <editor> element to startup an editor
+   var editorElement = GetCurrentEditorElement();
+@@ -3797,7 +3849,15 @@
+   }
+   a = splitEmailAddress(a.toLowerCase());
+   b = splitEmailAddress(b.toLowerCase());
+-  return a[1] == b[1] && a[0].split("+", 1)[0] == b[0].split("+", 1)[0];
++  if ( a[1] == b[1] ) {
++    var namea = a[0].split("+", 1)[0];
++    var nameb = b[0].split("+", 1)[0];
++
++    nameb = nameb.replace(new RegExp("\\.", 'g'), "\\.").replace(new RegExp("\\*", 'g'), ".*");
++    var re = new RegExp("^" + nameb + "$");
++    return re.test(namea);
++  }
++  return false;
+ }
+ 
+ // The new, nice, simple way of getting notified when a new editor has been created
+--- ./comm/mailnews/compose/src/nsMsgCompose.cpp	2021-07-12 16:35:21.000000000 +0300
++++ ../../thunderbird-78.12.0/./comm/mailnews/compose/src/nsMsgCompose.cpp	2021-08-02 09:15:52.000000000 +0300
+@@ -83,6 +83,174 @@
+ using namespace mozilla::dom;
+ using namespace mozilla::mailnews;
+ 
++
++// Jief
++
++int WildcardCompare(const char* wild, const char* string)
++{
++    const char* cp = NULL;
++    const char* mp = NULL;
++
++    while ((*string) && (*wild != '*'))
++    {
++        if ((*wild != *string) && (*wild != '?'))
++        {
++            return 0;
++        }
++        wild++;
++        string++;
++    }
++
++    while (*string)
++    {
++        if (*wild == '*')
++        {
++            if (!*++wild)
++            {
++                return 1;
++            }
++            mp = wild;
++            cp = string+1;
++        }
++        else if ((*wild == *string) || (*wild == '?'))
++        {
++            wild++;
++            string++;
++        }
++        else
++        {
++            wild = mp;
++            string = cp++;
++        }
++    }
++
++    while (*wild == '*')
++    {
++        wild++;
++    }
++    return !*wild;
++}
++
++int WildcardCompare(const nsCString&  wild, const nsCString&  string)
++{
++  return WildcardCompare(wild.get(), string.get());
++}
++
++nsCString noneIfEmpty(const nsCString& string)
++{
++  if ( string.Length() > 0 ) return string;
++  nsCString none;
++  none.AppendLiteral("none");
++  return none;
++}
++
++nsCString getUsernameFromEmailAddress(const nsCString& fullAddress)
++{
++  PRInt32 idx = fullAddress.Find("@", true, 0, -1);
++  nsAutoCString name;
++  if ( idx == kNotFound ) return std::move(name); // empty string so far
++  fullAddress.Mid(name, 0, idx);
++  return std::move(name);
++}
++
++nsCString getDomainFromEmailAddress(const nsCString& emailAddress)
++{
++  PRInt32 idx = emailAddress.Find("@", true, 0, -1);
++  nsAutoCString emailDomain;
++  if ( idx == kNotFound ) return std::move(emailDomain); // empty string so far
++  emailAddress.Mid(emailDomain, idx+1, emailAddress.Length());
++  return std::move(emailDomain);
++}
++
++nsCString constructFullAddress(const nsCString& name, const nsCString& emailAddress)
++{
++  nsCString returnValue;
++  if ( name.Length() > 0 ) {
++    returnValue.Append(name);
++    returnValue.Append(" <");
++  }
++  returnValue.Append(emailAddress);
++  if ( name.Length() > 0 ) {
++    returnValue.Append(">");
++  }
++  return returnValue;
++}
++
++/*
++ * target way have wildcards
++ */
++PRInt32 getFullAddressThatMatches(const nsCString& target, const nsTArray<nsCString>& names, const nsTArray<nsCString>& emailAddresses, nsTArray<nsCString>* macthes)
++{
++  PRInt32 nbFound = 0;
++  nsCString fullAddress;
++
++  for (PRUint32 i = 0; i < emailAddresses.Length(); i++) {
++    if ( WildcardCompare(target.get(), emailAddresses[i].get()) ) {
++      (*macthes).AppendElement(constructFullAddress(names[i], emailAddresses[i]));
++      nbFound += 1;
++    }
++  }
++  return nbFound;
++}
++
++/*
++ * target way have wildcards
++ */
++nsCString getFullAddressThatMatchesIfUniq(const nsCString& target, const nsTArray<nsCString>& names, const nsTArray<nsCString>& emailAddresses, PRInt32* nbFoundPtr = NULL)
++{
++  PRInt32 nbFound = 0;
++  nsCString fullAddress;
++
++  for (PRUint32 i = 0; i < emailAddresses.Length(); i++) {
++    if ( WildcardCompare(target.get(), emailAddresses[i].get()) ) {
++      if ( nbFound >= 1 ) {
++        if ( nbFoundPtr ) *nbFoundPtr = 0;
++        return nsCString();
++      }
++      fullAddress = constructFullAddress(names[i], emailAddresses[i]);
++      nbFound += 1;
++    }
++  }
++  if ( nbFoundPtr ) *nbFoundPtr = nbFound;
++  return fullAddress; // fullAddress is empty if nbFound==0
++}
++
++/*
++ * target way have wildcards
++ */
++PRInt32 getFullAddressesThatMatches(const nsCString& target, const nsTArray<nsCString>& names1, const nsTArray<nsCString>& emailAddresses1, const nsTArray<nsCString>& names2, const nsTArray<nsCString>& emailAddresses2, nsTArray<nsCString>* macthes)
++{
++  PRInt32 nbFound1 = getFullAddressThatMatches(target, names1, emailAddresses1, macthes);
++  PRInt32 nbFound2 = getFullAddressThatMatches(target, names2, emailAddresses2, macthes);
++
++  return nbFound1 + nbFound2;
++}
++
++/*
++ * target way have wildcards
++ */
++nsCString getFullAddressThatMatchesIfUniq(const nsCString& target, const nsTArray<nsCString>& names1, const nsTArray<nsCString>& emailAddresses1, const nsTArray<nsCString>& names2, const nsTArray<nsCString>& emailAddresses2, PRInt32* nbFoundPtr = NULL)
++{
++  PRInt32 nbFound1 = 0;
++  nsCString fullAddress1 = getFullAddressThatMatchesIfUniq(target, names1, emailAddresses1, &nbFound1);
++  PRInt32 nbFound2 = 0;
++  nsCString fullAddress2 = getFullAddressThatMatchesIfUniq(target, names2, emailAddresses2, &nbFound2);
++
++  if ( nbFoundPtr ) *nbFoundPtr = nbFound1 + nbFound2;
++
++  if ( fullAddress1.Length() > 0 && fullAddress2.Length() > 0 ) return nsCString();
++  if ( fullAddress1.Length() == 0 ) return fullAddress2;
++  return fullAddress1;
++}
++
++
++
++
++
++
++
++
++
+ static nsresult GetReplyHeaderInfo(int32_t* reply_header_type,
+                                    nsString& reply_header_authorwrote,
+                                    nsString& reply_header_ondateauthorwrote,
+@@ -1778,7 +1946,53 @@
+   }
+ 
+   // If we don't have an original message URI, nothing else to do...
+-  if (!originalMsgURI || *originalMsgURI == 0) return NS_OK;
++  if (!originalMsgURI || *originalMsgURI == 0) {
++  
++    nsAutoCString identityEmail;
++    m_identity->GetEmail(identityEmail);
++    nsAutoCString identityEmailMask;
++    m_identity->GetEmailMask(identityEmailMask);
++    
++    if ( identityEmailMask.IsEmpty() ) {
++      compFields->SetFrom(NS_ConvertUTF8toUTF16(identityEmail));
++    }else{
++      auto idx = identityEmail.Find("@");
++      if ( idx != kNotFound )
++      {
++        auto name = Substring(identityEmail, 0, idx);
++        nsAutoCString accountDomain(Substring(identityEmail, idx, -1));
++        nsString fullName;
++        m_identity->GetFullName(fullName);
++      
++//        PRInt32 min = 0;
++//        PRInt32 max = 9;
++      
++        nsString generatedEmail;
++        if ( !fullName.IsEmpty() ) {
++          generatedEmail.Append(fullName);
++          generatedEmail.AppendLiteral(" <");
++        }
++        for (PRUint32 i = 0; i < identityEmailMask.Length(); i++) {
++          if ( identityEmailMask[i] == '?' ) {
++            PRInt32 num = rand() % 10;
++            generatedEmail.AppendInt(num);
++          }else{
++            generatedEmail.Append(identityEmailMask[i]);
++          }
++        }
++        generatedEmail.Append(NS_ConvertUTF8toUTF16(accountDomain));
++        if ( ! fullName.IsEmpty() ) {
++          generatedEmail.AppendLiteral(">");
++        }
++        m_compFields->SetFrom(generatedEmail);
++
++//        identityElement.value = generatedEmail;
++      }
++    }
++
++  
++    return NS_OK;
++  }
+ 
+   // store the original message URI so we can extract it after we send the
+   // message to properly mark any disposition flags like replied or forwarded on
+@@ -1788,6 +2002,54 @@
+   nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID, &rv));
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
++  nsresult rv_GetMsgDBHdrFromURI = NS_OK;
++      // We want to treat this message as a reference too
++      nsCOMPtr<nsIMsgDBHdr> msgHdr;
++      rv = GetMsgDBHdrFromURI(originalMsgURI, getter_AddRefs(msgHdr));
++      if (NS_SUCCEEDED(rv_GetMsgDBHdrFromURI))
++      {
++          nsCString charset;
++          m_compFields->GetCharacterSet(getter_Copies(charset));
++
++          nsAutoCString fromC;
++          msgHdr->GetAuthor(getter_Copies(fromC));
++          nsAutoString from;
++          nsMsgI18NConvertRawBytesToUTF16(fromC, charset, from);
++
++          nsAutoCString recipientsC;
++          msgHdr->GetRecipients(getter_Copies(recipientsC));
++          nsTArray<nsCString> toNames;
++          nsTArray<nsCString> toEmailAddresses;
++          ExtractAllAddresses(EncodedHeader(recipientsC), UTF16ArrayAdapter<>(toNames), UTF16ArrayAdapter<>(toEmailAddresses));
++
++
++          nsAutoCString ccC;
++          msgHdr->GetCcList(getter_Copies(ccC));
++          nsTArray<nsCString> ccNames;
++          nsTArray<nsCString> ccEmailAddresses;
++          ExtractAllAddresses(EncodedHeader(ccC), UTF16ArrayAdapter<>(ccNames), UTF16ArrayAdapter<>(ccEmailAddresses));
++
++  //        nsAutoCString bccC;
++  //        msgHdr->GetBCcList(getter_Copies(bccC));
++
++          nsCString identityEmail;
++          m_identity->GetEmail(identityEmail);
++          
++          PRInt32 nbFound = 0;
++          nsCString newFrom = getFullAddressThatMatchesIfUniq(identityEmail, toNames, toEmailAddresses, ccNames, ccEmailAddresses, &nbFound);
++          if ( nbFound == 0 ) {
++            nsPrintfCString err("No address that matches '%s' was found in To & Cc list", identityEmail.get());
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++          }else
++          if ( nbFound == 1 ) {
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(newFrom));
++          }else{
++            nsPrintfCString err("More than 1 address match '%s' was found in To & Cc list", identityEmail.get());
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++          }
++        }
++        
++
+   // "Forward inline" and "Reply with template" processing.
+   // Note the early return at the end of the block.
+   if (type == nsIMsgCompType::ForwardInline ||
+@@ -1810,9 +2072,9 @@
+     }
+ 
+     // We want to treat this message as a reference too
+-    nsCOMPtr<nsIMsgDBHdr> msgHdr;
+-    rv = GetMsgDBHdrFromURI(originalMsgURI, getter_AddRefs(msgHdr));
+-    if (NS_SUCCEEDED(rv)) {
++//    nsCOMPtr<nsIMsgDBHdr> msgHdr;
++//    rv = GetMsgDBHdrFromURI(originalMsgURI, getter_AddRefs(msgHdr));
++    if (NS_SUCCEEDED(rv_GetMsgDBHdrFromURI)) {
+       nsAutoCString messageId;
+       msgHdr->GetMessageId(getter_Copies(messageId));
+ 
+@@ -2428,11 +2690,14 @@
+       nsCString fromEmailAddress;
+       ExtractEmail(EncodedHeaderW(from), fromEmailAddress);
+ 
++
++      nsTArray<nsCString> toNames;
+       nsTArray<nsCString> toEmailAddresses;
+-      ExtractEmails(EncodedHeaderW(to), UTF16ArrayAdapter<>(toEmailAddresses));
++      ExtractAllAddresses(EncodedHeader(NS_ConvertUTF16toUTF8(to)), UTF16ArrayAdapter<>(toNames), UTF16ArrayAdapter<>(toEmailAddresses));
+ 
++      nsTArray<nsCString> ccNames;
+       nsTArray<nsCString> ccEmailAddresses;
+-      ExtractEmails(EncodedHeaderW(cc), UTF16ArrayAdapter<>(ccEmailAddresses));
++      ExtractAllAddresses(EncodedHeader(NS_ConvertUTF16toUTF8(cc)), UTF16ArrayAdapter<>(ccNames), UTF16ArrayAdapter<>(ccEmailAddresses));
+ 
+       nsCOMPtr<nsIPrefBranch> prefs(
+           do_GetService(NS_PREFSERVICE_CONTRACTID, &rv));
+@@ -2479,7 +2744,7 @@
+       }
+ 
+       bool isReplyToSelf = false;
+-      nsCOMPtr<nsIMsgIdentity> selfIdentity;
++//      nsCOMPtr<nsIMsgIdentity> selfIdentity;
+       if (!identities.IsEmpty()) {
+         nsTArray<nsCString> toEmailAddressesLower(toEmailAddresses.Length());
+         for (auto email : toEmailAddresses) {
+@@ -2492,46 +2757,65 @@
+           ccEmailAddressesLower.AppendElement(email);
+         }
+ 
+-        // Go through the identities to see if any of them is the author of
+-        // the email.
+-        for (auto lookupIdentity : identities) {
+-          selfIdentity = lookupIdentity;
++////         Go through the identities to see if any of them is the author of
++////         the email.
++//        for (auto lookupIdentity : identities) {
++//          selfIdentity = lookupIdentity;
++
++        {
++          nsCOMPtr<nsIMsgIdentity> selfIdentity;
++//          nsCString selfIdentityEmail;
++//          nsString selfIdentityName;
++//          nsCString selfIdentityEmailDomain;
++          
++          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
++          selfIdentity = _compose->m_identity;
+ 
+-          nsCString curIdentityEmail;
+-          lookupIdentity->GetEmail(curIdentityEmail);
++          nsCString selfIdentityEmail;
++          selfIdentity->GetEmail(selfIdentityEmail);
+ 
+           // See if it's a reply to own message, but not a reply between
+           // identities.
+-          if (curIdentityEmail.Equals(fromEmailAddress,
+-                                      nsCaseInsensitiveCStringComparator)) {
+-            isReplyToSelf = true;
++//Jief
++          nsTArray<nsCString> adresses;
++          PRInt32 nb = getFullAddressesThatMatches(selfIdentityEmail, toNames, toEmailAddresses, ccNames, ccEmailAddresses, &adresses);
++          if ( nb == 0 ) {
++            // We don't exist in 'to' and 'cc', maybe we are replying to self.
++            if ( WildcardCompare(selfIdentityEmail, fromEmailAddress) ) {
++              isReplyToSelf = true;
++            }
++          }
++//
++//          // See if it's a reply to own message, but not a reply between identities.
++//          if (isReplyToSelf)
++//          {
+             // For a true reply-to-self, none of your identities are normally in
+             // To or Cc. We need to avoid doing a reply-to-self for people that
+             // have multiple identities set and sometimes *uses* the other
+             // identity and sometimes *mails* the other identity.
+             // E.g. husband+wife or own-email+company-role-mail.
+-            for (auto lookupIdentity2 : identities) {
+-              nsCString curIdentityEmail2;
+-              lookupIdentity2->GetEmail(curIdentityEmail2);
+-              ToLowerCase(curIdentityEmail2);
+-              if (toEmailAddressesLower.Contains(curIdentityEmail2)) {
+-                // However, "From:me To:me" should be treated as
+-                // reply-to-self if we have a Bcc. If we don't have a Bcc we
+-                // might have the case of a generated mail of the style
+-                // "From:me To:me Reply-To:customer". Then we need to to do a
+-                // normal reply to the customer.
+-                isReplyToSelf = !bcc.IsEmpty();  // true if bcc is set
+-                break;
+-              } else if (ccEmailAddressesLower.Contains(curIdentityEmail2)) {
+-                // If you auto-Cc yourself your email would be in Cc - but we
+-                // can't detect why it is in Cc so lets just treat it like a
+-                // normal reply.
+-                isReplyToSelf = false;
+-                break;
+-              }
+-            }
+-            break;
+-          }
++//            for (auto lookupIdentity2 : identities) {
++//              nsCString curIdentityEmail2;
++//              lookupIdentity2->GetEmail(curIdentityEmail2);
++//              ToLowerCase(curIdentityEmail2);
++//              if (toEmailAddressesLower.Contains(curIdentityEmail2)) {
++//                // However, "From:me To:me" should be treated as
++//                // reply-to-self if we have a Bcc. If we don't have a Bcc we
++//                // might have the case of a generated mail of the style
++//                // "From:me To:me Reply-To:customer". Then we need to to do a
++//                // normal reply to the customer.
++//                isReplyToSelf = !bcc.IsEmpty();  // true if bcc is set
++//                break;
++//              } else if (ccEmailAddressesLower.Contains(curIdentityEmail2)) {
++//                // If you auto-Cc yourself your email would be in Cc - but we
++//                // can't detect why it is in Cc so lets just treat it like a
++//                // normal reply.
++//                isReplyToSelf = false;
++//                break;
++//              }
++//            }
++//            break;
++//          }
+         }
+       }
+       if (type == nsIMsgCompType::ReplyToSenderAndGroup ||
+@@ -2540,17 +2824,19 @@
+         if (isReplyToSelf) {
+           // Cast to concrete class. We *only* what to change m_identity, not
+           // all the things compose->SetIdentity would do.
+-          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
+-          _compose->m_identity = selfIdentity;
++//          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
++//          _compose->m_identity = selfIdentity;
+           compFields->SetFrom(from);
+           compFields->SetTo(to);
+           compFields->SetReplyTo(replyTo);
+         } else if (!mailReplyTo.IsEmpty()) {
+           // handle Mail-Reply-To (http://cr.yp.to/proto/replyto.html)
++//          compFields->SetFrom(to);
+           compFields->SetTo(mailReplyTo);
+           needToRemoveDup = true;
+         } else if (!replyTo.IsEmpty()) {
+           // default reply behaviour then
++//          compFields->SetFrom(to);
+ 
+           if (overrideReplyTo && !listPost.IsEmpty() &&
+               replyTo.Find(listPost) != kNotFound) {
+@@ -2562,14 +2848,32 @@
+           }
+           needToRemoveDup = true;
+         } else {
++////Jief
++//          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
++//          nsCString identityEmail;
++//          _compose->m_identity->GetEmail(identityEmail);
++//
++//          PRInt32 nbFound = 0;
++//          nsCString newFrom = getFullAddressThatMatchesIfUniq(identityEmail, toNames, toEmailAddresses, ccNames, ccEmailAddresses, &nbFound);
++//          if ( nbFound == 0 ) {
++//            nsPrintfCString err("No address that matches '%s' was found in To & Cc list", identityEmail.get());
++//            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++//          }else
++//          if ( nbFound == 1 ) {
++//            compFields->SetFrom(NS_ConvertUTF8toUTF16(newFrom));
++//          }else{
++//            nsPrintfCString err("More than 1 address match '%s' was found in To & Cc list", identityEmail.get());
++//            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++//          }
++//          
+           compFields->SetTo(from);
+         }
+       } else if (type == nsIMsgCompType::ReplyAll) {
+         if (isReplyToSelf) {
+           // Cast to concrete class. We *only* what to change m_identity, not
+           // all the things compose->SetIdentity would do.
+-          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
+-          _compose->m_identity = selfIdentity;
++//          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
++//          _compose->m_identity = selfIdentity;
+           compFields->SetFrom(from);
+           compFields->SetTo(to);
+           compFields->SetCc(cc);
+@@ -2584,6 +2888,23 @@
+         } else if (mailFollowupTo.IsEmpty()) {
+           // default reply-all behaviour then
+ 
++//          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
++//          nsCString identityEmail;
++//          _compose->m_identity->GetEmail(identityEmail);
++//
++//          PRInt32 nbFound = 0;
++//          nsCString newFrom = getFullAddressThatMatchesIfUniq(identityEmail, toNames, toEmailAddresses, ccNames, ccEmailAddresses, &nbFound);
++//          if ( nbFound == 0 ) {
++//            nsPrintfCString err("No address that matches '%s' was found in To & Cc list", identityEmail.get());
++//            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++//          }else
++//          if ( nbFound == 1 ) {
++//            compFields->SetFrom(NS_ConvertUTF8toUTF16(newFrom));
++//          }else{
++//            nsPrintfCString err("More than 1 address match '%s' was found in To & Cc list", identityEmail.get());
++//            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++//          }
++
+           nsAutoString allTo;
+           if (!replyTo.IsEmpty()) {
+             allTo.Assign(replyTo);
+@@ -2599,8 +2920,16 @@
+             allTo.Assign(from);
+           }
+ 
+-          allTo.AppendLiteral(", ");
+-          allTo.Append(to);
++//          for (PRUint32 idx = 0 ; idx < toEmailAddresses.Length() ; idx += 1) {
++//            if ( !WildcardCompare(identityEmail, toEmailAddresses[idx]) ) {
++//          allTo.AppendLiteral(", ");
++//              allTo.Append(NS_ConvertUTF8toUTF16(constructFullAddress(toNames[idx], toEmailAddresses[idx])));
++//            }
++//          }
++
++
++           allTo.AppendLiteral(", ");
++           allTo.Append(to);
+           compFields->SetTo(allTo);
+ 
+           nsAutoString allCc;
+--- ./comm/mailnews/base/prefs/content/am-identity-edit.xhtml	2021-07-12 16:35:21.000000000 +0300
++++ ../../thunderbird-78.12.0/./comm/mailnews/base/prefs/content/am-identity-edit.xhtml	2021-07-21 14:47:48.000000000 +0300
+@@ -89,6 +89,21 @@
+ 
+               </html:td>
+             </html:tr>
++        <html:tr>
++          <html:th>
++            <label id="identity.emailMask.label" value="&emailMask.label;"
++                   control="identity.emailMask" accesskey="&emailMask.accesskey;"/>
++          </html:th>
++          <html:td>
++            <html:input id="identity.emailMask"
++                        type="text"
++                        wsm_persist="true"
++                        prefstring="mail.identity.%identitykey%.emailMask"
++                        class="uri-element input-inline"
++                        placeholder="&emailMask.placeholder;"
++                        aria-labelledby="identity.emailMask.label"/>
++          </html:td>
++        </html:tr>
+             <html:tr>
+               <html:th>
+                 <label id="identity.replyTo.label"
+--- ./comm/mailnews/base/prefs/content/am-main.xhtml	2021-07-12 16:35:21.000000000 +0300
++++ ../../thunderbird-78.12.0/./comm/mailnews/base/prefs/content/am-main.xhtml	2021-07-21 14:56:51.000000000 +0300
+@@ -79,6 +79,21 @@
+         </html:tr>
+         <html:tr>
+           <html:th>
++            <label id="identity.emailMask.label" value="Email template"
++                   control="identity.emailMask" accesskey=""/>
++          </html:th>
++          <html:td>
++            <html:input id="identity.emailMask"
++                        type="text"
++                        wsm_persist="true"
++                        prefstring="mail.identity.%identitykey%.emailMask"
++                        class="uri-element input-inline"
++                        placeholder=""
++                        aria-labelledby="identity.emailMask.label"/>
++          </html:td>
++        </html:tr>
++        <html:tr>
++          <html:th>
+             <label id="identity.replyTo.label" value="&replyTo.label;"
+                    control="identity.replyTo" accesskey="&replyTo.accesskey;"/>
+           </html:th>
+--- ./comm/mailnews/base/public/nsIMsgIdentity.idl	2021-07-12 16:35:21.000000000 +0300
++++ ../../thunderbird-78.12.0/./comm/mailnews/base/public/nsIMsgIdentity.idl	2021-07-21 14:24:29.000000000 +0300
+@@ -41,6 +41,11 @@
+   attribute ACString email;
+ 
+   /**
++   * User's e-mail mask to generate new address.
++   */
++  attribute ACString emailMask;
++
++  /**
+    * Do we use multiple e-mail addresses (like Catch-All) with this identity?
+    */
+   attribute boolean catchAll;
+--- ./comm/mailnews/base/src/nsMsgIdentity.cpp	2021-07-12 16:35:21.000000000 +0300
++++ ../../thunderbird-78.12.0/./comm/mailnews/base/src/nsMsgIdentity.cpp	2021-07-21 14:27:03.000000000 +0300
+@@ -139,6 +139,7 @@
+ NS_IMPL_IDPREF_STR(SmtpServerKey, "smtpServer")
+ NS_IMPL_IDPREF_WSTR(FullName, "fullName")
+ NS_IMPL_IDPREF_STR(Email, "useremail")
++NS_IMPL_IDPREF_STR(EmailMask, "emailMask")
+ NS_IMPL_IDPREF_BOOL(CatchAll, "catchAll")
+ NS_IMPL_IDPREF_STR(CatchAllHint, "catchAllHint")
+ NS_IMPL_IDPREF_WSTR(Label, "label")

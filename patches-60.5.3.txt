@@ -1,0 +1,588 @@
+--- ./comm/mail/components/compose/content/MsgComposeCommands.js	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mail/components/compose/content/MsgComposeCommands.js	2019-04-08 15:35:22.000000000 +0300
+@@ -2144,6 +2144,51 @@
+       dump("### textEditor.wrapWidth exception text: " + e + " - failed\n");
+     }
+   }
++  // Jief
++  try {
++    var identityElement = document.getElementById("msgIdentity");
++    if ( gMsgCompose.compFields.from !== "" ) {
++      identityElement.value = gMsgCompose.compFields.from;
++    }else{
++      var idKey = identityElement.selectedItem.getAttribute("identitykey");
++      var identity = MailServices.accounts.getIdentity(idKey);
++      var email = identity.email;
++      var emailMask = identity.emailMask;
++      
++      if ( emailMask == null  ||  emailMask.length == 0 ) {
++        identityElement.value = identity.fullAddress;
++      }else{
++        var idx = email.indexOf("@");
++        var name = email.substring(0, idx);
++        var accountDomain = email.substring(idx);
++        var fullName = identity.fullName;
++      
++        var min = 0;
++        var max = 9;
++      
++        var generatedEmail = "";
++        if ( fullName != null  &&  fullName.length > 0 ) {
++          generatedEmail = fullName + " <";
++        }
++        for (var i = 0; i < emailMask.length; i++) {
++          if ( emailMask.charAt(i) == '?' ) {
++            var num = Math.floor(Math.random() * (max - min + 1)) + min;
++            generatedEmail = generatedEmail + num;
++          }else{
++            generatedEmail = generatedEmail + emailMask.charAt(i);
++          }
++        }
++        generatedEmail = generatedEmail + accountDomain;
++        if ( fullName != null  &&  fullName.length > 0 ) {
++          generatedEmail = generatedEmail + ">";
++        }
++        identityElement.value = generatedEmail;
++      }
++    }
++  }
++  catch (ex) {
++  }
++  
+   CompFields2Recipients(gMsgCompose.compFields);
+   SetComposeWindowTitle();
+   updateEditableFields(false);
+@@ -2862,12 +2907,17 @@
+     // Search for a matching identity.
+     if (from) {
+       for (let ident of fixIterator(identities, Ci.nsIMsgIdentity)) {
+-        if (ident.email && from == ident.email.toLowerCase()) {
+-          if (suitableCount == 0)
+-            params.identity = ident;
+-          suitableCount++;
+-          if (suitableCount > 1)
+-            break; // No need to find more, it's already not unique.
++        if (ident.email) {
++          var email1 = ident.email.toLowerCase().replace(new RegExp("\\.", 'g'), "\\.");
++          var email2 = email1.replace(new RegExp("\\*", 'g'), ".*");
++          var re = new RegExp("^" + email2 + "$");
++          if ( re.test(from) ) {
++            if (suitableCount == 0)
++              params.identity = ident;
++            suitableCount++;
++            if (suitableCount > 1)
++              break; // No need to find more, it's already not unique.
++          }
+         }
+       }
+     }
+@@ -2906,6 +2956,8 @@
+     }
+   }
+   LoadIdentity(true);
++// Jief
++  MakeFromFieldEditable(true);
+ 
+   // Get the <editor> element to startup an editor
+   var editorElement = GetCurrentEditorElement();
+@@ -3038,7 +3090,15 @@
+     return a == b;
+   a = splitEmailAddress(a.toLowerCase());
+   b = splitEmailAddress(b.toLowerCase());
+-  return a[1] == b[1] && a[0].split("+", 1)[0] == b[0].split("+", 1)[0];
++  if ( a[1] == b[1] ) {
++    var namea = a[0].split("+", 1)[0];
++    var nameb = b[0].split("+", 1)[0];
++
++    nameb = nameb.replace(new RegExp("\\.", 'g'), "\\.").replace(new RegExp("\\*", 'g'), ".*");
++    var re = new RegExp("^" + nameb + "$");
++    return re.test(namea);
++  }
++  return false;
+ }
+ 
+ // The new, nice, simple way of getting notified when a new editor has been created
+--- ./comm/mail/base/content/mailWindowOverlay.js	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mail/base/content/mailWindowOverlay.js	2019-04-03 15:50:45.000000000 +0300
+@@ -1651,6 +1651,16 @@
+     MsgReplySender(event);
+ }
+ 
++/**
++ * re-send the selected messages
++ *
++ * @param event the event that caused us to call this function
++ */
++function MsgResend(event)
++{
++  composeMsgByType(Ci.nsIMsgCompType.EditAsNew, event);
++}
++
+ function MsgReplySender(event)
+ {
+   composeMsgByType(Ci.nsIMsgCompType.ReplyToSender, event);
+--- ./comm/mail/base/content/msgHdrViewOverlay.xul	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mail/base/content/msgHdrViewOverlay.xul	2019-04-02 22:00:21.000000000 +0300
+@@ -228,6 +228,12 @@
+                   </menupopup>
+                 </toolbarbutton>
+               </toolbaritem>
++              <toolbarbutton id="hdrResendButton"
++                             label="Réémettre"
++                             tooltiptext="Réémettre"
++                             oncommand="MsgResend(event);RestoreFocusAfterHdrButton();"
++                             observes="button_forward"
++                             class="toolbarbutton-1 msgHeaderView-button hdrArchiveButton"/>
+               <toolbarbutton id="hdrArchiveButton"
+                              label="&hdrArchiveButton1.label;"
+                              tooltiptext="&hdrArchiveButton1.tooltip;"
+@@ -417,7 +423,7 @@
+                      customizable="true" mode="full"
+                      context="header-toolbar-context-menu"
+                      defaulticonsize="small" defaultmode="full"
+-                     defaultset="hdrReplyToSenderButton,hdrSmartReplyButton,hdrForwardButton,hdrArchiveButton,hdrJunkButton,hdrTrashButton,otherActionsButton"/>
++                     defaultset="hdrResendButton,hdrReplyToSenderButton,hdrSmartReplyButton,hdrForwardButton,hdrArchiveButton,hdrJunkButton,hdrTrashButton,otherActionsButton"/>
+           </toolbox>
+ 
+           <!-- This box ensures that the expandedHeaders grid below is aligned
+--- ./comm/mail/base/content/mailWindowOverlay.xul	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mail/base/content/mailWindowOverlay.xul	2019-03-31 12:23:20.000000000 +0300
+@@ -279,6 +279,7 @@
+   <command id="button_replyall"/>
+   <command id="button_replylist"/>
+   <command id="button_followup"/>
++  <command id="button_resend"/>
+   <command id="button_archive"/>
+   <command id="button_forward"/>
+   <command id="button_delete"/>
+--- ./comm/mailnews/compose/public/nsIMsgComposeParams.idl	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mailnews/compose/public/nsIMsgComposeParams.idl	2019-04-03 01:17:33.000000000 +0300
+@@ -50,6 +50,8 @@
+      */
+     const long EditTemplate             = 16;
+ 
++    const long ReplyResend              = 17;
++
+     /**
+      * Add this value to a reply type to suppress quoting the current selection
+      * which may not belong to the message being replied to.
+--- ./comm/mailnews/compose/src/nsMsgCompose.cpp	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mailnews/compose/src/nsMsgCompose.cpp	2019-04-03 01:05:21.000000000 +0300
+@@ -2121,7 +2121,22 @@
+       switch (type)
+       {
+         default: break;
+-        case nsIMsgCompType::Reply :
++        case nsIMsgCompType::ReplyResend:
++          {
++            if (!isFirstPass)       // safeguard, just in case...
++            {
++              PR_Free(uriList);
++              return rv;
++            }
++            nsAutoString empty;
++            m_compFields->SetTo(empty);
++            m_compFields->SetCc(empty);
++            m_compFields->SetBcc(empty);
++            m_compFields->SetNewsgroups(empty);
++            m_compFields->SetFollowupTo(empty);
++            break;
++          }
++        case nsIMsgCompType::Reply:
+         case nsIMsgCompType::ReplyAll:
+         case nsIMsgCompType::ReplyToList:
+         case nsIMsgCompType::ReplyToGroup:
+@@ -2484,6 +2499,202 @@
+   return NS_OK;
+ }
+ 
++// Jief
++
++int WildcardCompare(const char* wild, const char* string) 
++{
++    const char* cp = NULL;
++    const char* mp = NULL;
++
++    while ((*string) && (*wild != '*')) 
++    {
++        if ((*wild != *string) && (*wild != '?')) 
++        {
++            return 0;
++        }
++        wild++;
++        string++;
++    }
++
++    while (*string) 
++    {
++        if (*wild == '*') 
++        {
++            if (!*++wild) 
++            {
++                return 1;
++            }
++            mp = wild;
++            cp = string+1;
++        } 
++        else if ((*wild == *string) || (*wild == '?')) 
++        {
++            wild++;
++            string++;
++        } 
++        else 
++        {
++            wild = mp;
++            string = cp++;
++        }
++    }
++
++    while (*wild == '*') 
++    {
++        wild++;
++    }
++    return !*wild;
++}
++
++int WildcardCompare(const nsCString&  wild, const nsCString&  string)
++{
++	return WildcardCompare(wild.get(), string.get());
++}
++
++nsCString noneIfEmpty(const nsCString& string)
++{
++  if ( string.Length() > 0 ) return string;
++  nsCString none;
++  none.AppendLiteral("none");
++  return none;
++}
++
++nsCString getUsernameFromEmailAddress(const nsCString& fullAddress)
++{
++  PRInt32 idx = fullAddress.Find("@", true, 0, -1);
++  nsAutoCString name;
++  if ( idx == kNotFound ) return name; // empty string so far
++  fullAddress.Mid(name, 0, idx);
++  return name;
++}
++
++nsCString getDomainFromEmailAddress(const nsCString& emailAddress)
++{
++  PRInt32 idx = emailAddress.Find("@", true, 0, -1);
++  nsAutoCString emailDomain;
++  if ( idx == kNotFound ) return emailDomain; // empty string so far
++  emailAddress.Mid(emailDomain, idx+1, emailAddress.Length());
++  return emailDomain;
++}
++
++nsCString constructFullAddress(const nsCString& name, const nsCString& emailAddress)
++{
++  nsCString returnValue;
++  if ( name.Length() > 0 ) {
++    returnValue.Append(name);
++    returnValue.Append(" <");
++  }
++  returnValue.Append(emailAddress);
++  if ( name.Length() > 0 ) {
++    returnValue.Append(">");
++  }
++  return returnValue;
++}
++
++/*
++ * target way have wildcards
++ */
++PRInt32 getFullAddressThatMatches(const nsCString& target, const nsTArray<nsCString>& names, const nsTArray<nsCString>& emailAddresses, nsTArray<nsCString>* macthes)
++{
++  PRInt32 nbFound = 0;
++  nsCString fullAddress;
++
++  for (PRUint32 i = 0; i < emailAddresses.Length(); i++) {
++    if ( WildcardCompare(target.get(), emailAddresses[i].get()) ) {
++      (*macthes).AppendElement(constructFullAddress(names[i], emailAddresses[i]));
++      nbFound += 1;
++    }
++  }
++  return nbFound;
++}
++
++/*
++ * target way have wildcards
++ */
++nsCString getFullAddressThatMatchesIfUniq(const nsCString& target, const nsTArray<nsCString>& names, const nsTArray<nsCString>& emailAddresses, PRInt32* nbFoundPtr = NULL)
++{
++  PRInt32 nbFound = 0;
++  nsCString fullAddress;
++
++  for (PRUint32 i = 0; i < emailAddresses.Length(); i++) {
++    if ( WildcardCompare(target.get(), emailAddresses[i].get()) ) {
++      if ( nbFound >= 1 ) {
++        if ( nbFoundPtr ) *nbFoundPtr = 0;
++        return nsCString();
++      }
++      fullAddress = constructFullAddress(names[i], emailAddresses[i]);
++      nbFound += 1;
++    }
++  }
++  if ( nbFoundPtr ) *nbFoundPtr = nbFound;
++  return fullAddress; // fullAddress is empty if nbFound==0
++}
++
++/*
++ * target way have wildcards
++ */
++PRInt32 getFullAddressesThatMatches(const nsCString& target, const nsTArray<nsCString>& names1, const nsTArray<nsCString>& emailAddresses1, const nsTArray<nsCString>& names2, const nsTArray<nsCString>& emailAddresses2, nsTArray<nsCString>* macthes)
++{
++  PRInt32 nbFound1 = getFullAddressThatMatches(target, names1, emailAddresses1, macthes);
++  PRInt32 nbFound2 = getFullAddressThatMatches(target, names2, emailAddresses2, macthes);
++
++  return nbFound1 + nbFound2;
++}
++
++/*
++ * target way have wildcards
++ */
++nsCString getFullAddressThatMatchesIfUniq(const nsCString& target, const nsTArray<nsCString>& names1, const nsTArray<nsCString>& emailAddresses1, const nsTArray<nsCString>& names2, const nsTArray<nsCString>& emailAddresses2, PRInt32* nbFoundPtr = NULL)
++{
++  PRInt32 nbFound1 = 0;
++  nsCString fullAddress1 = getFullAddressThatMatchesIfUniq(target, names1, emailAddresses1, &nbFound1);
++  PRInt32 nbFound2 = 0;
++  nsCString fullAddress2 = getFullAddressThatMatchesIfUniq(target, names2, emailAddresses2, &nbFound2);
++
++  if ( nbFoundPtr ) *nbFoundPtr = nbFound1 + nbFound2;
++
++  if ( fullAddress1.Length() > 0 && fullAddress2.Length() > 0 ) return nsCString();
++  if ( fullAddress1.Length() == 0 ) return fullAddress2;
++  return fullAddress1;
++}
++
++// 
++// nsCString getFullAddressWithDomainIfUniq(const nsCString& targetEmailDomain, const nsTArray<nsCString>& names, const nsTArray<nsCString>& emailAddresses, PRInt32* nbFoundPtr = NULL)
++// {
++//   PRInt32 nbFound = 0;
++//   nsCString fullAddress;
++// 
++//   PRUint32 i = emailAddresses.Length();
++//   while (i > 0) {
++//      --i;
++//     nsCString emailDomain = getDomainFromEmailAddress(emailAddresses[i]);
++//     if ( emailDomain.Equals(targetEmailDomain) ) {
++//       fullAddress = constructFullAddress(names[i], emailAddresses[i]);
++//       nbFound += 1;
++//     }
++//   }
++//   if ( nbFoundPtr ) *nbFoundPtr = nbFound;
++//   if ( nbFound == 1 ) return fullAddress;
++//   else {
++//     nsCString emptyString;
++//     return emptyString;
++//   }
++// }
++// 
++// nsCString getFullAddressWithDomainIfUniq(const nsCString& targetEmailDomain, const nsTArray<nsCString>& names1, const nsTArray<nsCString>& emailAddresses1, const nsTArray<nsCString>& names2, const nsTArray<nsCString>& emailAddresses2, PRInt32* nbFoundPtr = NULL)
++// {
++//   PRInt32 nbFound1 = 0;
++//   nsCString fullAddress1 = getFullAddressWithDomainIfUniq(targetEmailDomain, names1, emailAddresses1, &nbFound1);
++//   PRInt32 nbFound2 = 0;
++//   nsCString fullAddress2 = getFullAddressWithDomainIfUniq(targetEmailDomain, names2, emailAddresses2, &nbFound2);
++// 
++//   if ( nbFoundPtr ) *nbFoundPtr = nbFound1 + nbFound2;
++// 
++//   if ( fullAddress1.Length() > 0 && fullAddress2.Length() > 0 ) return nsCString();
++//   if ( fullAddress1.Length() == 0 ) return fullAddress2;
++//   return fullAddress1;
++// }
++
+ NS_IMETHODIMP QuotingOutputStreamListener::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult status)
+ {
+   nsresult rv = NS_OK;
+@@ -2622,13 +2833,13 @@
+       nsCString fromEmailAddress;
+       ExtractEmail(EncodedHeader(NS_ConvertUTF16toUTF8(from)), fromEmailAddress);
+ 
++      nsTArray<nsCString> toNames;
+       nsTArray<nsCString> toEmailAddresses;
+-      ExtractEmails(EncodedHeader(NS_ConvertUTF16toUTF8(to)),
+-        UTF16ArrayAdapter<>(toEmailAddresses));
++      ExtractAllAddresses(EncodedHeader(NS_ConvertUTF16toUTF8(to)), UTF16ArrayAdapter<>(toNames), UTF16ArrayAdapter<>(toEmailAddresses));
+ 
++      nsTArray<nsCString> ccNames;
+       nsTArray<nsCString> ccEmailAddresses;
+-      ExtractEmails(EncodedHeader(NS_ConvertUTF16toUTF8(cc)),
+-        UTF16ArrayAdapter<>(ccEmailAddresses));
++      ExtractAllAddresses(EncodedHeader(NS_ConvertUTF16toUTF8(cc)), UTF16ArrayAdapter<>(ccNames), UTF16ArrayAdapter<>(ccEmailAddresses));
+ 
+       nsCOMPtr<nsIPrefBranch> prefs (do_GetService(NS_PREFSERVICE_CONTRACTID, &rv));
+       NS_ENSURE_SUCCESS(rv, rv);
+@@ -2676,6 +2887,10 @@
+ 
+       bool isReplyToSelf = false;
+       nsCOMPtr<nsIMsgIdentity> selfIdentity;
++      nsCString selfIdentityEmail;
++      nsString selfIdentityName;
++//       nsCString selfIdentityEmailName;
++      nsCString selfIdentityEmailDomain;
+       if (identities)
+       {
+         // Go through the identities to see if any of them is the author of
+@@ -2693,13 +2908,21 @@
+ 
+           selfIdentity = lookupIdentity;
+ 
+-          nsCString curIdentityEmail;
+-          lookupIdentity->GetEmail(curIdentityEmail);
++          lookupIdentity->GetEmail(selfIdentityEmail);
++
++//Jief
++          nsTArray<nsCString> adresses;
++          PRInt32 nb = getFullAddressesThatMatches(selfIdentityEmail, toNames, toEmailAddresses, ccNames, ccEmailAddresses, &adresses);
++          if ( nb == 0 ) {
++			  // We don't exist in 'to' and 'cc', maybe we are replying to self.
++			  if ( WildcardCompare(selfIdentityEmail, fromEmailAddress) ) {
++				  isReplyToSelf = true;
++			  }
++          }
+ 
+           // See if it's a reply to own message, but not a reply between identities.
+-          if (curIdentityEmail.Equals(fromEmailAddress))
++          if (isReplyToSelf)
+           {
+-            isReplyToSelf = true;
+             // For a true reply-to-self, none of your identities are normally in
+             // To or Cc. We need to avoid doing a reply-to-self for people that
+             // have multiple identities set and sometimes *uses* the other
+@@ -2751,12 +2974,15 @@
+         else if (!mailReplyTo.IsEmpty())
+         {
+           // handle Mail-Reply-To (http://cr.yp.to/proto/replyto.html)
++//to.AssignLiteral("b@b.com");
++          compFields->SetFrom(to);
+           compFields->SetTo(mailReplyTo);
+           needToRemoveDup = true;
+         }
+         else if (!replyTo.IsEmpty())
+         {
+           // default reply behaviour then
++          compFields->SetFrom(to);
+ 
+           if (overrideReplyTo &&
+               !listPost.IsEmpty() && replyTo.Find(listPost) != kNotFound)
+@@ -2772,10 +2998,28 @@
+           needToRemoveDup = true;
+         }
+         else {
++//Jief
++          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
++          nsCString identityEmail;
++          _compose->m_identity->GetEmail(identityEmail);
++
++          PRInt32 nbFound = 0;
++          nsCString newFrom = getFullAddressThatMatchesIfUniq(identityEmail, toNames, toEmailAddresses, ccNames, ccEmailAddresses, &nbFound);
++          if ( nbFound == 0 ) {
++            nsPrintfCString err("No address that matches '%s' was found in To & Cc list", identityEmail.get());
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++          }else
++          if ( nbFound == 1 ) {
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(newFrom));
++          }else{
++            nsPrintfCString err("More than 1 address match '%s' was found in To & Cc list", identityEmail.get());
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++          }
++          
+           compFields->SetTo(from);
+         }
+       }
+-      else if (type == nsIMsgCompType::ReplyAll)
++      else if (type == nsIMsgCompType::ReplyAll  ||  type == nsIMsgCompType::ReplyResend)
+       {
+         if (isReplyToSelf)
+         {
+@@ -2799,6 +3043,23 @@
+         else if (mailFollowupTo.IsEmpty()) {
+           // default reply-all behaviour then
+ 
++          nsMsgCompose* _compose = static_cast<nsMsgCompose*>(compose.get());
++          nsCString identityEmail;
++          _compose->m_identity->GetEmail(identityEmail);
++
++          PRInt32 nbFound = 0;
++          nsCString newFrom = getFullAddressThatMatchesIfUniq(identityEmail, toNames, toEmailAddresses, ccNames, ccEmailAddresses, &nbFound);
++          if ( nbFound == 0 ) {
++            nsPrintfCString err("No address that matches '%s' was found in To & Cc list", identityEmail.get());
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++          }else
++          if ( nbFound == 1 ) {
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(newFrom));
++          }else{
++            nsPrintfCString err("More than 1 address match '%s' was found in To & Cc list", identityEmail.get());
++            compFields->SetFrom(NS_ConvertUTF8toUTF16(err));
++          }
++
+           nsAutoString allTo;
+           if (!replyTo.IsEmpty())
+           {
+@@ -2818,8 +3079,16 @@
+             allTo.Assign(from);
+           }
+ 
+-          allTo.AppendLiteral(", ");
+-          allTo.Append(to);
++          for (PRUint32 idx = 0 ; idx < toEmailAddresses.Length() ; idx += 1) {
++            if ( !WildcardCompare(identityEmail, toEmailAddresses[idx]) ) {
++              allTo.AppendLiteral(", ");
++              allTo.Append(NS_ConvertUTF8toUTF16(constructFullAddress(toNames[idx], toEmailAddresses[idx])));
++            }
++          }
++
++
++//           allTo.AppendLiteral(", ");
++//           allTo.Append(to);
+           compFields->SetTo(allTo);
+ 
+           nsAutoString allCc;
+--- ./comm/mailnews/base/prefs/content/am-main.xul	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mailnews/base/prefs/content/am-main.xul	2019-04-01 11:09:57.000000000 +0300
+@@ -57,6 +57,12 @@
+                      prefstring="mail.identity.%identitykey%.useremail" class="uri-element"/>
+           </row>
+           <row align="center">
++            <label value="Username template" control="identity.emailMask"
++                   accesskey="T"/>
++            <textbox wsm_persist="true" id="identity.emailMask"
++                     prefstring="mail.identity.%identitykey%.emailMask" class="uri-element"/>
++          </row>
++          <row align="center">
+             <label value="&replyTo.label;" control="identity.replyTo"
+                    accesskey="&replyTo.accesskey;"/>
+             <textbox wsm_persist="true" id="identity.replyTo"
+--- ./comm/mailnews/base/util/nsMsgIdentity.cpp	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mailnews/base/util/nsMsgIdentity.cpp	2019-03-31 19:38:26.000000000 +0300
+@@ -154,6 +154,7 @@
+ NS_IMPL_IDPREF_STR(SmtpServerKey, "smtpServer")
+ NS_IMPL_IDPREF_WSTR(FullName, "fullName")
+ NS_IMPL_IDPREF_STR(Email, "useremail")
++NS_IMPL_IDPREF_STR(EmailMask, "emailMask")
+ NS_IMPL_IDPREF_WSTR(Label, "label")
+ NS_IMPL_IDPREF_STR(ReplyTo, "reply_to")
+ NS_IMPL_IDPREF_WSTR(Organization, "organization")
+@@ -569,6 +570,7 @@
+ 
+     COPY_IDENTITY_BOOL_VALUE(identity,GetComposeHtml,SetComposeHtml)
+     COPY_IDENTITY_STR_VALUE(identity,GetEmail,SetEmail)
++    COPY_IDENTITY_STR_VALUE(identity,GetEmailMask,SetEmailMask)
+     COPY_IDENTITY_WSTR_VALUE(identity,GetLabel,SetLabel)
+     COPY_IDENTITY_STR_VALUE(identity,GetReplyTo,SetReplyTo)
+     COPY_IDENTITY_WSTR_VALUE(identity,GetFullName,SetFullName)
+--- ./comm/mailnews/base/public/nsIMsgIdentity.idl	2019-03-04 21:17:58.000000000 +0300
++++ ../../thunderbird-60.5.3/./comm/mailnews/base/public/nsIMsgIdentity.idl	2019-03-31 18:16:57.000000000 +0300
+@@ -41,6 +41,11 @@
+   attribute ACString email;
+ 
+   /**
++   * User's e-mail mask to generate new address.
++   */
++  attribute ACString emailMask;
++
++  /**
+    * Formats fullName and email into the proper string to use as sender:
+    * name <email>
+    */
